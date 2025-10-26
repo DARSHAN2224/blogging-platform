@@ -8,7 +8,12 @@ export function TRPCProvider({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(() => new QueryClient({
     defaultOptions: {
       queries: {
-        staleTime: 60 * 1000, // 1 minute
+        staleTime: 5 * 60 * 1000, // 5 minutes - data stays fresh longer
+        gcTime: 10 * 60 * 1000, // 10 minutes - keep in cache longer (formerly cacheTime)
+        refetchOnWindowFocus: false, // Don't refetch on window focus for better UX
+        refetchOnMount: false, // Don't refetch on component mount if data exists
+        retry: 1, // Only retry failed requests once
+        retryDelay: 1000, // Wait 1 second before retrying
       },
     },
   }));

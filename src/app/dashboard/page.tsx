@@ -5,6 +5,8 @@ import { trpc } from '@/lib/trpc/client';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { useDebounce } from '@/lib/hooks/useDebounce';
 import { 
   FileText, 
   FolderOpen, 
@@ -16,10 +18,12 @@ import {
   PlusCircle,
   ArrowRight,
   Grid3x3,
-  List
+  List,
+  Search,
+  X
 } from 'lucide-react';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import type { PostWithCategories } from '@/types';
 
 export default function DashboardPage() {
@@ -27,14 +31,36 @@ export default function DashboardPage() {
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
   const [page, setPage] = useState(1);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [searchQuery, setSearchQuery] = useState('');
   const limit = 12;
 
-  // Fetch posts (paginated); dashboard shows summary from first page, counts come from getCounts
-  const { data: postsPaged, isLoading: postsLoading } = trpc.post.getAll.useQuery({ page, limit });
-  const { data: counts } = trpc.post.getCounts.useQuery();
+  // Debounced search to avoid too many queries
+  const debouncedSearch = useDebounce(searchQuery, 300);
+  
+  // Reset to first page when search changes
+  useEffect(() => {
+    if (debouncedSearch !== searchQuery) {
+      setPage(1);
+    }
+  }, [debouncedSearch, searchQuery]);
+
+  // Fetch posts (paginated with search)
+  const { data: postsPaged, isLoading: postsLoading } = trpc.post.getAll.useQuery({ 
+    page, 
+    limit,
+    search: debouncedSearch || undefined,
+  }, {
+    placeholderData: (previousData) => previousData, // Smooth pagination experience
+  });
+  
+  const { data: counts } = trpc.post.getCounts.useQuery(undefined, {
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+  });
 
   // Fetch categories
-  const { data: categories, isLoading: categoriesLoading } = trpc.category.getAll.useQuery();
+  const { data: categories, isLoading: categoriesLoading } = trpc.category.getAll.useQuery(undefined, {
+    staleTime: 10 * 60 * 1000, // Cache for 10 minutes
+  });
 
   // Toggle published mutation with optimistic update
   const togglePublished = trpc.post.togglePublished.useMutation({
@@ -44,7 +70,7 @@ export default function DashboardPage() {
       await utils.post.getCounts.cancel();
       
       // Snapshot previous value
-      const previousPosts = utils.post.getAll.getData({ page, limit });
+      const previousPosts = utils.post.getAll.getData({ page, limit, search: debouncedSearch || undefined });
       const previousCounts = utils.post.getCounts.getData();
       
       // Optimistically update
@@ -55,7 +81,7 @@ export default function DashboardPage() {
             post.id === id ? { ...post, published: !post.published } : post
           ),
         };
-        utils.post.getAll.setData({ page, limit }, updated);
+        utils.post.getAll.setData({ page, limit, search: debouncedSearch || undefined }, updated);
       }
       
       return { previousPosts, previousCounts };
@@ -63,7 +89,7 @@ export default function DashboardPage() {
     onError: (err, variables, context) => {
       // Rollback on error
       if (context?.previousPosts) {
-        utils.post.getAll.setData({ page, limit }, context.previousPosts);
+        utils.post.getAll.setData({ page, limit, search: debouncedSearch || undefined }, context.previousPosts);
       }
       if (context?.previousCounts) {
         utils.post.getCounts.setData(undefined, context.previousCounts);
@@ -82,7 +108,7 @@ export default function DashboardPage() {
       await utils.post.getAll.cancel();
       await utils.post.getCounts.cancel();
       
-      const previousPosts = utils.post.getAll.getData({ page, limit });
+      const previousPosts = utils.post.getAll.getData({ page, limit, search: debouncedSearch || undefined });
       const previousCounts = utils.post.getCounts.getData();
       
       // Optimistically remove post
@@ -92,14 +118,14 @@ export default function DashboardPage() {
           items: previousPosts.items.filter((post: PostWithCategories) => post.id !== id),
           total: previousPosts.total - 1,
         };
-        utils.post.getAll.setData({ page, limit }, updated);
+        utils.post.getAll.setData({ page, limit, search: debouncedSearch || undefined }, updated);
       }
       
       return { previousPosts, previousCounts };
     },
     onError: (err, variables, context) => {
       if (context?.previousPosts) {
-        utils.post.getAll.setData({ page, limit }, context.previousPosts);
+        utils.post.getAll.setData({ page, limit, search: debouncedSearch || undefined }, context.previousPosts);
       }
       if (context?.previousCounts) {
         utils.post.getCounts.setData(undefined, context.previousCounts);
@@ -112,22 +138,28 @@ export default function DashboardPage() {
     },
   });
 
-  const handleTogglePublished = (id: number) => {
+  const handleTogglePublished = useCallback((id: number) => {
     togglePublished.mutate({ id });
-  };
+  }, [togglePublished]);
 
-  const handleDelete = (id: number) => {
+  const handleDelete = useCallback((id: number) => {
     if (deleteConfirmId === id) {
       deletePost.mutate({ id });
     } else {
       setDeleteConfirmId(id);
       setTimeout(() => setDeleteConfirmId(null), 3000);
     }
-  };
+  }, [deleteConfirmId, deletePost]);
 
-  const allPosts = (postsPaged?.items as PostWithCategories[]) || [];
-  const publishedPosts = allPosts.filter((p) => p.published);
-  const draftPosts = allPosts.filter((p) => !p.published);
+  const handleClearSearch = useCallback(() => {
+    setSearchQuery('');
+    setPage(1);
+  }, []);
+
+  // Memoize filtered data
+  const allPosts = useMemo(() => (postsPaged?.items as PostWithCategories[]) || [], [postsPaged?.items]);
+  const publishedPosts = useMemo(() => allPosts.filter((p) => p.published), [allPosts]);
+  const draftPosts = useMemo(() => allPosts.filter((p) => !p.published), [allPosts]);
   const total = postsPaged?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
@@ -202,17 +234,50 @@ export default function DashboardPage() {
         {/* Quick Actions */}
         <div className="mb-8 flex flex-wrap gap-3">
           <Link href="/blog/new">
-            <Button size="lg">
+            <Button size="lg" className="shadow-md hover:shadow-lg transition-shadow">
               <PlusCircle className="mr-2 h-5 w-5" />
               Create New Post
             </Button>
           </Link>
           <Link href="/categories">
-            <Button variant="outline" size="lg">
+            <Button variant="outline" size="lg" className="shadow-sm hover:shadow-md transition-shadow">
               <FolderOpen className="mr-2 h-5 w-5" />
               Manage Categories
             </Button>
           </Link>
+        </div>
+
+        {/* Search Bar */}
+        <div className="mb-8">
+          <div className="relative max-w-2xl">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground pointer-events-none" />
+            <Input
+              type="text"
+              placeholder="Search posts by title, content, or author..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-12 pr-12 py-6 text-base shadow-sm border-2 focus:border-primary transition-all"
+            />
+            {searchQuery && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleClearSearch}
+                className="absolute right-2 top-1/2 -translate-y-1/2 h-8 w-8 p-0 hover:bg-muted"
+                title="Clear search"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+          {debouncedSearch && (
+            <p className="mt-2 text-sm text-muted-foreground">
+              {total === 0 
+                ? `No results found for "${debouncedSearch}"`
+                : `Found ${total} result${total !== 1 ? 's' : ''} for "${debouncedSearch}"`
+              }
+            </p>
+          )}
         </div>
 
         {/* Posts List */}
@@ -225,7 +290,7 @@ export default function DashboardPage() {
                 All Posts ({total})
               </h2>
               {/* View Toggle */}
-              <div className="flex items-center gap-2 bg-muted/50 rounded-lg p-1">
+              <div className="flex items-center gap-2 bg-muted/50 rounded-lg p-1 shadow-sm">
                 <Button
                   variant={viewMode === 'grid' ? 'default' : 'ghost'}
                   size="sm"
@@ -255,7 +320,7 @@ export default function DashboardPage() {
                     {allPosts.map((post) => (
                       <Card 
                         key={post.id} 
-                        className="group hover:shadow-xl transition-shadow duration-300 overflow-hidden"
+                        className="group hover:shadow-xl hover:scale-[1.02] transition-all duration-300 overflow-hidden border-2 hover:border-primary/50"
                       >
                         <CardContent className="pt-6">
                           <div className="flex flex-col h-full">
@@ -267,8 +332,8 @@ export default function DashboardPage() {
                                 <Badge 
                                   variant="secondary" 
                                   className={post.published 
-                                    ? "bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300 shrink-0" 
-                                    : "bg-orange-100 text-orange-800 dark:bg-orange-900/50 dark:text-orange-300 shrink-0"}
+                                    ? "bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300 shrink-0 shadow-sm" 
+                                    : "bg-orange-100 text-orange-800 dark:bg-orange-900/50 dark:text-orange-300 shrink-0 shadow-sm"}
                                 >
                                   {post.published ? <CheckCircle className="h-3 w-3 mr-1" /> : <Clock className="h-3 w-3 mr-1" />}
                                   {post.published ? 'Published' : 'Draft'}
@@ -298,13 +363,13 @@ export default function DashboardPage() {
                             </div>
                             <div className="flex gap-2 pt-3 border-t">
                               <Link href={`/blog/${post.slug}`} className="flex-1">
-                                <Button variant="outline" size="sm" className="w-full">
+                                <Button variant="outline" size="sm" className="w-full hover:bg-primary hover:text-primary-foreground transition-colors">
                                   <Eye className="h-4 w-4 mr-1" />
                                   View
                                 </Button>
                               </Link>
                               <Link href={`/blog/edit/${post.id}`} className="flex-1">
-                                <Button variant="outline" size="sm" className="w-full">
+                                <Button variant="outline" size="sm" className="w-full hover:bg-primary hover:text-primary-foreground transition-colors">
                                   <Edit className="h-4 w-4 mr-1" />
                                   Edit
                                 </Button>
@@ -315,6 +380,7 @@ export default function DashboardPage() {
                                 onClick={() => handleTogglePublished(post.id)}
                                 disabled={togglePublished.isPending}
                                 title={post.published ? "Unpublish" : "Publish"}
+                                className="hover:bg-primary hover:text-primary-foreground transition-colors"
                               >
                                 {post.published ? <Clock className="h-4 w-4" /> : <CheckCircle className="h-4 w-4" />}
                               </Button>
@@ -324,6 +390,7 @@ export default function DashboardPage() {
                                 onClick={() => handleDelete(post.id)}
                                 disabled={deletePost.isPending}
                                 title={deleteConfirmId === post.id ? "Click again to confirm" : "Delete"}
+                                className="transition-all"
                               >
                                 <Trash2 className="h-4 w-4" />
                               </Button>
@@ -339,7 +406,7 @@ export default function DashboardPage() {
                 {viewMode === 'list' && (
                   <div className="space-y-3">
                     {allPosts.map((post) => (
-                      <Card key={post.id} className="group hover:shadow-md transition-all duration-300">
+                      <Card key={post.id} className="group hover:shadow-lg hover:border-primary/50 transition-all duration-300 border-2">
                         <CardContent className="pt-6">
                           <div className="flex items-center justify-between gap-6">
                             <div className="flex-1 min-w-0">
@@ -350,8 +417,8 @@ export default function DashboardPage() {
                                 <Badge 
                                   variant="secondary" 
                                   className={post.published 
-                                    ? "bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300 shrink-0" 
-                                    : "bg-orange-100 text-orange-800 dark:bg-orange-900/50 dark:text-orange-300 shrink-0"}
+                                    ? "bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300 shrink-0 shadow-sm" 
+                                    : "bg-orange-100 text-orange-800 dark:bg-orange-900/50 dark:text-orange-300 shrink-0 shadow-sm"}
                                 >
                                   {post.published ? <CheckCircle className="h-3 w-3 mr-1" /> : <Clock className="h-3 w-3 mr-1" />}
                                   {post.published ? 'Published' : 'Draft'}
@@ -383,12 +450,12 @@ export default function DashboardPage() {
                             </div>
                             <div className="flex gap-2 shrink-0">
                               <Link href={`/blog/${post.slug}`}>
-                                <Button variant="outline" size="sm" title="View post">
+                                <Button variant="outline" size="sm" title="View post" className="hover:bg-primary hover:text-primary-foreground transition-colors">
                                   <Eye className="h-4 w-4" />
                                 </Button>
                               </Link>
                               <Link href={`/blog/edit/${post.id}`}>
-                                <Button variant="outline" size="sm" title="Edit post">
+                                <Button variant="outline" size="sm" title="Edit post" className="hover:bg-primary hover:text-primary-foreground transition-colors">
                                   <Edit className="h-4 w-4" />
                                 </Button>
                               </Link>
@@ -398,6 +465,7 @@ export default function DashboardPage() {
                                 onClick={() => handleTogglePublished(post.id)}
                                 disabled={togglePublished.isPending}
                                 title={post.published ? "Unpublish" : "Publish"}
+                                className="hover:bg-primary hover:text-primary-foreground transition-colors"
                               >
                                 {post.published ? <Clock className="h-4 w-4" /> : <CheckCircle className="h-4 w-4" />}
                               </Button>
@@ -407,6 +475,7 @@ export default function DashboardPage() {
                                 onClick={() => handleDelete(post.id)}
                                 disabled={deletePost.isPending}
                                 title={deleteConfirmId === post.id ? "Click again to confirm" : "Delete"}
+                                className="transition-all"
                               >
                                 <Trash2 className="h-4 w-4" />
                               </Button>
@@ -419,15 +488,26 @@ export default function DashboardPage() {
                 )}
               </>
             ) : (
-              <div className="text-center py-12 bg-muted/30 rounded-xl">
+              <div className="text-center py-12 bg-muted/30 rounded-xl border-2 border-dashed">
                 <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                <p className="text-muted-foreground mb-4">No posts yet. Create your first post to get started!</p>
-                <Link href="/blog/new">
-                  <Button>
-                    <PlusCircle className="mr-2 h-4 w-4" />
-                    Create Post
+                <p className="text-muted-foreground mb-4">
+                  {debouncedSearch 
+                    ? `No posts found matching "${debouncedSearch}"`
+                    : "No posts yet. Create your first post to get started!"}
+                </p>
+                {debouncedSearch ? (
+                  <Button onClick={handleClearSearch} variant="outline">
+                    <X className="mr-2 h-4 w-4" />
+                    Clear Search
                   </Button>
-                </Link>
+                ) : (
+                  <Link href="/blog/new">
+                    <Button>
+                      <PlusCircle className="mr-2 h-4 w-4" />
+                      Create Post
+                    </Button>
+                  </Link>
+                )}
               </div>
             )}
           </div>

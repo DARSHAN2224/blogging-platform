@@ -6,8 +6,9 @@ import { Button } from '@/components/ui/button';
 import { ArrowRight, Search } from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import Head from 'next/head';
+import { useDebounce } from '@/lib/hooks/useDebounce';
 import type { PostListItem, Paginated, Category } from '@/types';
 
 type RecentPost = {
@@ -18,26 +19,49 @@ type RecentPost = {
   coverImageUrl: string | null;
   author: string | null;
 };
+
 export default function BlogPage() {
   const [search, setSearch] = useState("");
   const [selectedCategories] = useState<number[]>([]);
-
   const [page, setPage] = useState(1);
   const limit = 9;
+
+  // Debounce search with custom hook
+  const debouncedSearch = useDebounce(search, 300);
 
   // Reset to first page when search or category filter changes
   useEffect(() => {
     setPage(1);
-  }, [search, selectedCategories]);
-  // Fetch posts with optional multi-category filter (paginated)
+  }, [debouncedSearch, selectedCategories]);
+  
+  // Fetch posts with caching optimizations
   const { data: paged, isLoading: postsLoading } = trpc.post.getAll.useQuery({
     published: true,
     categoryIds: selectedCategories.length ? selectedCategories : undefined,
-    search: search.trim() ? search : undefined,
+    search: debouncedSearch.trim() ? debouncedSearch : undefined,
     page,
     limit,
+  }, {
+    placeholderData: (previousData) => previousData, // Keep previous data while loading new page
+    staleTime: 2 * 60 * 1000, // 2 minutes
   });
-  const { data: recentPosts, isLoading: recentLoading } = trpc.post.getRecent.useQuery({ limit: 4 });
+  
+  const { data: recentPosts, isLoading: recentLoading } = trpc.post.getRecent.useQuery({ 
+    limit: 4 
+  }, {
+    staleTime: 5 * 60 * 1000, // 5 minutes - recent posts don't change often
+  });
+
+  // Memoize computed values
+  const featured = useMemo(() => recentPosts?.[0] as RecentPost | undefined, [recentPosts]);
+  const otherRecent = useMemo(() => (recentPosts?.slice(1) as RecentPost[]) || [], [recentPosts]);
+  const total = useMemo(() => (paged as Paginated<PostListItem> | undefined)?.total ?? 0, [paged]);
+  const posts = useMemo(() => (paged as Paginated<PostListItem> | undefined)?.items ?? [], [paged]);
+  const totalPages = useMemo(() => Math.max(1, Math.ceil(total / limit)), [total, limit]);
+
+  const handleClearSearch = useCallback(() => {
+    setSearch("");
+  }, []);
 
   if (postsLoading || recentLoading) {
     return (
@@ -78,13 +102,6 @@ export default function BlogPage() {
       </MainLayout>
     );
   }
-
-  // Featured post (first recent)
-  const featured = recentPosts?.[0] as RecentPost | undefined;
-  const otherRecent = (recentPosts?.slice(1) as RecentPost[]) || [];
-  const total = (paged as Paginated<PostListItem> | undefined)?.total ?? 0;
-  const posts = (paged as Paginated<PostListItem> | undefined)?.items ?? [];
-  const totalPages = Math.max(1, Math.ceil(total / limit));
 
   return (
     <MainLayout>
