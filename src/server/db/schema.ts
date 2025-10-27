@@ -1,6 +1,6 @@
 import { pgTable, serial, text, timestamp, boolean, primaryKey } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
-
+//Using Drizzle ORM to define database schema for a blogging platform
 // Posts table
 export const posts = pgTable('posts', {
   id: serial('id').primaryKey(),

@@ -5,11 +5,17 @@ import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { PenSquare, Home, BookOpen, LayoutDashboard, Sun, Moon } from 'lucide-react';
 import { useTheme } from 'next-themes';
+import { useEffect, useState } from 'react';
 
 export function Navbar() {
   const pathname = usePathname();
   const { setTheme, resolvedTheme } = useTheme();
 
+  // Avoid hydration mismatch: theme value is only reliable on the client
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
   const navLinks = [
     { href: '/', label: 'Home', icon: Home },
     { href: '/blog', label: 'Blog', icon: BookOpen },
@@ -57,10 +63,16 @@ export function Navbar() {
               aria-label="Toggle theme"
               onClick={() => setTheme((resolvedTheme === 'dark' ? 'light' : 'dark'))}
             >
-              {resolvedTheme === 'dark' ? (
-                <Sun className="h-4 w-4" />
+              {/* Render theme-dependent icon only after client mount to prevent hydration mismatch */}
+              {mounted ? (
+                resolvedTheme === 'dark' ? (
+                  <Sun className="h-4 w-4" />
+                ) : (
+                  <Moon className="h-4 w-4" />
+                )
               ) : (
-                <Moon className="h-4 w-4" />
+                /* Placeholder element with same dimensions to avoid layout shift */
+                <span className="inline-block h-4 w-4" aria-hidden="true" />
               )}
             </Button>
 

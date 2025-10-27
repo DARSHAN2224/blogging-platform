@@ -8,7 +8,6 @@ const nextConfig: NextConfig = {
   
   // Performance optimizations
   reactStrictMode: true,
-  swcMinify: true,
   
   // Image optimizations
   images: {
@@ -31,10 +30,8 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   compress: true,
   
-  // Experimental features for better performance
-  experimental: {
-    optimizePackageImports: ['lucide-react', '@radix-ui/react-label', '@radix-ui/react-slot'],
-  },
+  // Note: Removed unsupported keys (swcMinify / experimental.optimizePackageImports)
+  // Keep core supported options and image optimization settings
 };
 
 export default nextConfig;

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { createTRPCRouter, publicProcedure } from '../trpc';
 import { db } from '../../db';
 import { posts, categories, postCategories } from '../../db/schema';
-import { eq, desc, inArray, ilike, and, or, SQL } from 'drizzle-orm';
+import { eq, desc, inArray, ilike, and, or, sql, SQL } from 'drizzle-orm';
 import { slugify } from '../../utils/slugify';
 import type { PostListItem, PostWithCategories as TypesPostWithCategories } from '@/types';
 
@@ -28,16 +28,17 @@ export const postRouter = createTRPCRouter({
       const offset = (page - 1) * limit;
       
       // Dynamic where conditions
-      const whereConds: SQL[] = [];
+  const whereConds: any[] = [];
       if (input?.published !== undefined) {
         whereConds.push(eq(posts.published, input.published));
       }
       if (input?.search && input.search.trim()) {
+        // Restrict search to title and author to avoid scanning large content field
+        // (Searching `content` is expensive and should use a full-text index / separate search service)
         const s = `%${input.search.trim()}%`;
         whereConds.push(
           or(
             ilike(posts.title, s),
-            ilike(posts.content, s),
             ilike(posts.author, s)
           )!
         );
@@ -49,7 +50,7 @@ export const postRouter = createTRPCRouter({
           id: posts.id,
           title: posts.title,
           slug: posts.slug,
-          content: posts.content,
+    // Avoid selecting full post content for list endpoints — it's heavy. Fetch content only in single-post endpoints.
           published: posts.published,
           createdAt: posts.createdAt,
           updatedAt: posts.updatedAt,
@@ -73,36 +74,49 @@ export const postRouter = createTRPCRouter({
         : [];
 
       if (!categoriesFilter.length) {
-        // total count
-        const countQuery = whereConds.length > 0
-          ? db.select({ id: posts.id }).from(posts).where(and(...whereConds))
-          : db.select({ id: posts.id }).from(posts);
-        const allRows = await countQuery;
-        const total = allRows.length;
+        // total count using COUNT aggregation (avoid loading all rows)
+        let countRow: any = db.select({ total: sql<number>`count(${posts.id})` }).from(posts);
+        if (whereConds.length) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          countRow = (countRow as any).where(and(...whereConds));
+        }
+        const countRes = await countRow;
+        const total = Number((countRes as any)[0]?.total ?? 0);
 
         // page slice
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const all = await (base as any).limit(limit).offset(offset) as PostListItem[];
         
-        // Fetch categories for each post
-        const postsWithCategories: TypesPostWithCategories[] = await Promise.all(
-          all.map(async (post) => {
-            const postCats = await db
-              .select({
-                id: categories.id,
-                name: categories.name,
-                slug: categories.slug,
-              })
-              .from(postCategories)
-              .innerJoin(categories, eq(postCategories.categoryId, categories.id))
-              .where(eq(postCategories.postId, post.id));
-            
-            return {
-              ...post,
-              categories: postCats,
-            } as TypesPostWithCategories;
-          })
-        );
+        // Fetch categories for all posts in a single query to avoid N+1
+        const postIds = all.map((p) => p.id);
+        let postsWithCategories: TypesPostWithCategories[] = [];
+        if (postIds.length) {
+          const postCatsRows = await db
+            .select({
+              postId: postCategories.postId,
+              id: categories.id,
+              name: categories.name,
+              slug: categories.slug,
+            })
+            .from(postCategories)
+            .innerJoin(categories, eq(postCategories.categoryId, categories.id))
+            .where(inArray(postCategories.postId, postIds));
+
+          // Group categories by postId
+          const catMap = new Map<number, { id: number; name: string; slug: string }[]>();
+          for (const row of postCatsRows) {
+            const arr = catMap.get(row.postId) || [];
+            arr.push({ id: row.id, name: row.name, slug: row.slug });
+            catMap.set(row.postId, arr);
+          }
+
+          postsWithCategories = all.map((post) => ({
+            ...post,
+            categories: catMap.get(post.id) || [],
+          } as TypesPostWithCategories));
+        } else {
+          postsWithCategories = all.map((post) => ({ ...post, categories: [] } as TypesPostWithCategories));
+        }
         
         return { items: postsWithCategories, total, page, limit } as const;
       }
@@ -122,7 +136,7 @@ export const postRouter = createTRPCRouter({
           id: posts.id,
           title: posts.title,
           slug: posts.slug,
-          content: posts.content,
+          // Avoid selecting full post content for list endpoints — fetch content only on getBySlug/getById
           published: posts.published,
           createdAt: posts.createdAt,
           updatedAt: posts.updatedAt,
@@ -138,42 +152,52 @@ export const postRouter = createTRPCRouter({
         filteredBase = filteredBase.where(and(...whereConds)) as any;
       }
 
-      // total count for filtered
-      const filteredCountQuery = db
-        .select({ id: posts.id })
+      // total count for filtered using COUNT aggregation
+      let filteredCountRow: any = db
+        .select({ total: sql<number>`count(${posts.id})` })
         .from(posts)
         .where(inArray(posts.id, postIds));
       if (whereConds.length) {
-        // apply whereConds to count as well
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (filteredCountQuery as any).where(and(...whereConds));
+        filteredCountRow = (filteredCountRow as any).where(and(...whereConds));
       }
-      const total = (await filteredCountQuery).length;
+      const filteredCountRes = await filteredCountRow;
+      const total = Number((filteredCountRes as any)[0]?.total ?? 0);
 
       // page slice
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const filtered = await (filteredBase as any).limit(limit).offset(offset) as PostListItem[];
       
-      // Fetch categories for each filtered post
-      const filteredWithCategories: TypesPostWithCategories[] = await Promise.all(
-  filtered.map(async (post: PostListItem) => {
-          const postCats = await db
-            .select({
-              id: categories.id,
-              name: categories.name,
-              slug: categories.slug,
-            })
-            .from(postCategories)
-            .innerJoin(categories, eq(postCategories.categoryId, categories.id))
-            .where(eq(postCategories.postId, post.id));
-          
-            return {
-              ...post,
-              categories: postCats,
-            } as TypesPostWithCategories;
-        })
-      );
-      
+      // Fetch categories for all filtered posts in a single query to avoid N+1
+      const filteredIds = filtered.map((p: PostListItem) => p.id);
+      let filteredWithCategories: TypesPostWithCategories[] = [];
+      if (filteredIds.length) {
+        const postCatsRows = await db
+          .select({
+            postId: postCategories.postId,
+            id: categories.id,
+            name: categories.name,
+            slug: categories.slug,
+          })
+          .from(postCategories)
+          .innerJoin(categories, eq(postCategories.categoryId, categories.id))
+          .where(inArray(postCategories.postId, filteredIds));
+
+        const catMap = new Map<number, { id: number; name: string; slug: string }[]>();
+        for (const row of postCatsRows) {
+          const arr = catMap.get(row.postId) || [];
+          arr.push({ id: row.id, name: row.name, slug: row.slug });
+          catMap.set(row.postId, arr);
+        }
+
+        filteredWithCategories = filtered.map((post: PostListItem) => ({
+          ...post,
+          categories: catMap.get(post.id) || [],
+        } as TypesPostWithCategories));
+      } else {
+        filteredWithCategories = filtered.map((post: PostListItem) => ({ ...post, categories: [] } as TypesPostWithCategories));
+      }
+
       return { items: filteredWithCategories, total, page, limit } as const;
     }),
 
@@ -417,12 +441,18 @@ export const postRouter = createTRPCRouter({
   // Get counts summary
   getCounts: publicProcedure
     .query(async () => {
-      const all = await db.select({ id: posts.id }).from(posts);
-      const published = await db
-        .select({ id: posts.id })
+      // Use SQL COUNT aggregation to avoid loading all rows into memory
+      const totalRow = await db
+        .select({ total: sql<number>`count(${posts.id})` })
+        .from(posts);
+      const publishedRow = await db
+        .select({ published: sql<number>`count(${posts.id})` })
         .from(posts)
         .where(eq(posts.published, true));
-      const draft = all.length - published.length;
-      return { total: all.length, published: published.length, draft } as const;
+
+      const total = Number((totalRow as any)[0]?.total ?? 0);
+      const published = Number((publishedRow as any)[0]?.published ?? 0);
+      const draft = Math.max(0, total - published);
+      return { total, published, draft } as const;
     }),
 });
