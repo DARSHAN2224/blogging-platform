@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { createTRPCRouter, publicProcedure } from '../trpc';
 import { db } from '../../db';
 import { posts, categories, postCategories } from '../../db/schema';
-import { eq, desc, inArray, ilike, and, or, sql, SQL } from 'drizzle-orm';
+import { eq, desc, inArray, ilike, and, or, sql, type SQL } from 'drizzle-orm';
 import { slugify } from '../../utils/slugify';
 import type { PostListItem, PostWithCategories as TypesPostWithCategories } from '@/types';
 
@@ -27,8 +27,9 @@ export const postRouter = createTRPCRouter({
       const limit = input?.limit ?? 9;
       const offset = (page - 1) * limit;
       
-      // Dynamic where conditions
-  const whereConds: any[] = [];
+    // Dynamic where conditions
+    // We collect expressions and apply them with `and(...whereConds)` below.
+    const whereConds: SQL[] = [];
       if (input?.published !== undefined) {
         whereConds.push(eq(posts.published, input.published));
       }
@@ -61,9 +62,8 @@ export const postRouter = createTRPCRouter({
         .orderBy(desc(posts.createdAt));
       
       // When applying dynamic where conditions we cast to satisfy Drizzle's narrow types
-      const base = whereConds.length > 0 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ? (baseQuery as any).where(and(...whereConds)) 
+      const base = whereConds.length > 0
+        ? (baseQuery as unknown as { where: (c: unknown) => unknown }).where(and(...whereConds))
         : baseQuery;
 
       // If no category filters, return directly
@@ -75,17 +75,18 @@ export const postRouter = createTRPCRouter({
 
       if (!categoriesFilter.length) {
         // total count using COUNT aggregation (avoid loading all rows)
-        let countRow: any = db.select({ total: sql<number>`count(${posts.id})` }).from(posts);
+        let countRow: unknown = db.select({ total: sql<number>`count(${posts.id})` }).from(posts);
         if (whereConds.length) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          countRow = (countRow as any).where(and(...whereConds));
+          // Apply dynamic where conditions to the count query.
+          countRow = (countRow as unknown as { where: (c: unknown) => unknown }).where(and(...whereConds));
         }
-        const countRes = await countRow;
-        const total = Number((countRes as any)[0]?.total ?? 0);
+        // Await the query builder to get the result array
+        const countRes = await (countRow as unknown) as Array<Record<string, unknown>>;
+        const total = Number((countRes[0]?.total ?? 0) as number | string | undefined ?? 0);
 
         // page slice
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const all = await (base as any).limit(limit).offset(offset) as PostListItem[];
+  // page slice: fetch just this page
+  const all = await ((base as unknown as { limit: (n: number) => { offset: (n: number) => Promise<PostListItem[]> } }).limit(limit).offset(offset));
         
         // Fetch categories for all posts in a single query to avoid N+1
         const postIds = all.map((p) => p.id);
@@ -144,29 +145,27 @@ export const postRouter = createTRPCRouter({
           author: posts.author,
         })
         .from(posts)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .where(inArray(posts.id, postIds)) as any;
+  // Constrain to the set of post IDs for the selected categories.
+  .where(inArray(posts.id, postIds)) as unknown;
 
       if (whereConds.length) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        filteredBase = filteredBase.where(and(...whereConds)) as any;
+        // Apply dynamic where conditions to the filtered base query.
+        filteredBase = (filteredBase as unknown as { where: (c: unknown) => unknown }).where(and(...whereConds)) as unknown;
       }
 
       // total count for filtered using COUNT aggregation
-      let filteredCountRow: any = db
+      let filteredCountRow: unknown = db
         .select({ total: sql<number>`count(${posts.id})` })
         .from(posts)
         .where(inArray(posts.id, postIds));
       if (whereConds.length) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        filteredCountRow = (filteredCountRow as any).where(and(...whereConds));
+        filteredCountRow = (filteredCountRow as unknown as { where: (c: unknown) => unknown }).where(and(...whereConds));
       }
-      const filteredCountRes = await filteredCountRow;
-      const total = Number((filteredCountRes as any)[0]?.total ?? 0);
+      const filteredCountRes = await (filteredCountRow as unknown) as Array<Record<string, unknown>>;
+      const total = Number((filteredCountRes[0]?.total ?? 0) as number | string | undefined ?? 0);
 
       // page slice
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const filtered = await (filteredBase as any).limit(limit).offset(offset) as PostListItem[];
+  const filtered = await ((filteredBase as unknown as { limit: (n: number) => { offset: (n: number) => Promise<PostListItem[]> } }).limit(limit).offset(offset));
       
       // Fetch categories for all filtered posts in a single query to avoid N+1
       const filteredIds = filtered.map((p: PostListItem) => p.id);
@@ -450,8 +449,8 @@ export const postRouter = createTRPCRouter({
         .from(posts)
         .where(eq(posts.published, true));
 
-      const total = Number((totalRow as any)[0]?.total ?? 0);
-      const published = Number((publishedRow as any)[0]?.published ?? 0);
+  const total = Number(((totalRow as unknown) as Array<Record<string, unknown>>)[0]?.total ?? 0);
+  const published = Number(((publishedRow as unknown) as Array<Record<string, unknown>>)[0]?.published ?? 0);
       const draft = Math.max(0, total - published);
       return { total, published, draft } as const;
     }),

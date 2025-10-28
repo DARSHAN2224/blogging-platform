@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ArrowLeft, FolderOpen, Edit, Trash2, Plus } from "lucide-react";
+import { ArrowLeft, FolderOpen } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 

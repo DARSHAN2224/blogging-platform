@@ -3,7 +3,7 @@
 import { MainLayout } from '@/components/layout/MainLayout';
 import { trpc } from '@/lib/trpc/client';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, Twitter, Facebook, Linkedin, Link2, Mail, Clock } from 'lucide-react';
+import { ArrowLeft, Twitter, Facebook, Linkedin, Link2, Clock } from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useParams } from 'next/navigation';
@@ -18,19 +18,6 @@ export default function PostPage() {
 
   const { data: post, isLoading, error } = trpc.post.getBySlug.useQuery({ slug });
 
-  const getCategoryColor = (categoryName: string) => {
-    const colors: Record<string, string> = {
-      "Design": "bg-violet-100 text-violet-700 dark:bg-violet-900/50 dark:text-violet-300",
-      "Research": "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300",
-      "Presentation": "bg-pink-100 text-pink-700 dark:bg-pink-900/50 dark:text-pink-300",
-      "Software Engineering": "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300",
-      "Frameworks": "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-300",
-      "Product": "bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300",
-      "SaaS": "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300",
-      "Leadership": "bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300",
-    };
-    return colors[categoryName] || "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300";
-  };
 
   const handleCopyLink = () => {
     const url = typeof window !== 'undefined' ? window.location.href : '';
@@ -55,12 +42,7 @@ export default function PostPage() {
     window.open(`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(url)}`, '_blank');
   };
 
-  const shareViaEmail = () => {
-    const url = typeof window !== 'undefined' ? window.location.href : '';
-    const subject = post?.title || '';
-    const body = `Check out this article: ${post?.title}\n\n${url}`;
-    window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-  };
+  // Note: Email sharing removed to avoid unused function warnings. Use social sharing buttons above.
 
   if (isLoading) {
     return (

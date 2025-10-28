@@ -257,7 +257,7 @@ export default function BlogPage() {
                     : "There are no published posts yet. Check back soon!"}
                 </p>
                 {search ? (
-                  <Button variant="outline" onClick={() => setSearch("")}>
+                  <Button variant="outline" onClick={handleClearSearch}> 
                     Clear Search
                   </Button>
                 ) : (

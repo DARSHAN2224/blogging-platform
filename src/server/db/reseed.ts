@@ -17,7 +17,8 @@ async function seed() {
     try {
       await db.execute(sql`ALTER SEQUENCE posts_id_seq RESTART WITH 1`);
       await db.execute(sql`ALTER SEQUENCE categories_id_seq RESTART WITH 1`);
-    } catch (e) {
+    } catch {
+      // Ignore errors resetting sequences (may not exist depending on DB)
       console.log('Note: Could not reset sequences (may not exist yet)');
     }
     console.log('✅ Database cleared');
